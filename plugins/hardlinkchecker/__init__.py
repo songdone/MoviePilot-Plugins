@@ -1,5 +1,3 @@
-# 文件路径：plugins/hardlinkchecker/__init__.py
-
 import os
 import logging
 from moviepilot.core.plugin import PluginBase

@@ -1,21 +1,20 @@
 {
   "name": "MoviePilot-Plugins",
-  "version": "1.0.0",  // 插件仓库的版本号，与插件代码中的版本号保持一致
+  "version": "1.0.0",
   "description": "MoviePilot 第三方插件仓库",
   "plugins": [
     {
-      "name": "hardlinkchecker",  // 插件目录名，也用作插件标识
-      "displayName": "媒体库硬链接检测",  // 插件显示名称
-      "version": "1.0.0",  // 插件版本号，需与__init__.py中的plugin_version一致
-      "level": 1,  // 插件用户可见权限
+      "name": "hardlinkchecker",
+      "displayName": "媒体库硬链接检测",
+      "version": "1.0.0",
+      "level": 1,
       "description": "检查指定媒体库目录中的硬链接，忽略小文件",
-      "icon": "https://github.com/songdone/MoviePilot-Plugins/blob/main/icons/hardLinkchecker.png",  // 插件图标链接
+      "icon": "https://github.com/songdone/MoviePilot-Plugins/blob/main/icons/hardLinkchecker.png",
       "author": "songdone",
       "email": "songdone@qq.com",
       "history": {
         "v1.0.0": "初始版本发布"
       }
-    },
-    // ... 其他插件的信息
+    }
   ]
 }

@@ -1,20 +1,13 @@
 {
-  "name": "MoviePilot-Plugins",
-  "version": "1.0.0",
-  "description": "MoviePilot 第三方插件仓库",
-  "plugins": [
-    {
-      "name": "hardlinkchecker",
-      "displayName": "媒体库硬链接检测",
-      "version": "1.0.0",
-      "level": 1,
-      "description": "检查指定媒体库目录中的硬链接，忽略小文件",
-      "icon": "https://github.com/songdone/MoviePilot-Plugins/blob/main/icons/hardLinkchecker.png",
-      "author": "songdone",
-      "email": "songdone@qq.com",
-      "history": {
-        "v1.0.0": "初始版本发布"
-      }
+    "HardLinkChecker": {
+        "name": "媒体库硬链接检测",
+        "description": "用于检测媒体库中的硬链接，统计成功和失败数量，并忽略小文件。",
+        "version": "1.0.0",
+        "icon": "https://raw.githubusercontent.com/songdone/MoviePilot-HardLinkChecker/main/icons/hardlink_checker.png",
+        "author": "songdone",
+        "level": 1,
+        "history": {
+            "v1.0.0": "初始版本：实现硬链接检测和统计功能，忽略小文件。"
+        }
     }
-  ]
 }

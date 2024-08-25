@@ -3,7 +3,7 @@
         "name": "媒体库硬链接检测",
         "description": "用于检测媒体库中的硬链接，统计成功和失败数量，并忽略小文件。",
         "version": "1.0.0",
-        "icon": "https://raw.githubusercontent.com/songdone/MoviePilot-HardLinkChecker/main/icons/hardlink_checker.png",
+        "icon": "https://github.com/songdone/MoviePilot-Plugins/blob/main/icons/hardLinkchecker.png?raw=true",
         "author": "songdone",
         "level": 1,
         "history": {

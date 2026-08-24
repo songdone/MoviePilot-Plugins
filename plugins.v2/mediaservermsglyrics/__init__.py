@@ -44,7 +44,7 @@ class MediaServerMsgLyrics(_PluginBase):
     # 插件图标
     plugin_icon = "mediaplay.png"
     # 插件版本
-    plugin_version = "1.1.7"
+    plugin_version = "1.1.8"
     # 插件作者
     plugin_author = "PlaySong"
     # 作者主页
@@ -67,6 +67,7 @@ class MediaServerMsgLyrics(_PluginBase):
     _lyrics_online_fallback = True             # 本地歌词缺失时查询LRCLIB
     _lyrics_public_url = "https://mp.playsong.cn"
     _cast_stream_url = ""                      # Apple TV 访问 MoviePilot 的局域网直连地址
+    _cast_sync_offset = 0.9                    # 补偿编码与 UnPlay 缓冲造成的电视显示延迟
     _lyrics_path_mappings = ""                 # Plex路径到MoviePilot容器路径的映射
     _unplay_host = ""                          # Apple TV 上 UnPlay 的 HTTP 投屏 IP
 
@@ -150,6 +151,13 @@ class MediaServerMsgLyrics(_PluginBase):
                     config.get("lyrics_public_url") or "https://mp.playsong.cn"
                 ).strip().rstrip("/")
                 self._cast_stream_url = str(config.get("cast_stream_url") or "").strip().rstrip("/")
+                try:
+                    self._cast_sync_offset = min(
+                        3.0,
+                        max(-2.0, float(config.get("cast_sync_offset", 0.9))),
+                    )
+                except (TypeError, ValueError):
+                    self._cast_sync_offset = 0.9
                 self._lyrics_path_mappings = str(config.get("lyrics_path_mappings") or "")
                 self._unplay_host = str(config.get("unplay_host") or "").strip()
             self._pending_messages = {}
@@ -530,6 +538,31 @@ class MediaServerMsgLyrics(_PluginBase):
                                     {
                                         'component': 'VTextField',
                                         'props': {
+                                            'model': 'cast_sync_offset',
+                                            'label': '电视歌词同步补偿（秒）',
+                                            'type': 'number',
+                                            'step': 0.1,
+                                            'min': -2,
+                                            'max': 3,
+                                            'hint': '默认 0.9；歌词仍晚于声音时增大，歌词早于声音时减小，可填写负数',
+                                            'persistent-hint': True,
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'props': {'show': '{{lyrics_enabled}}'},
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
                                             'model': 'cast_stream_url',
                                             'label': '电视流局域网直连地址（推荐）',
                                             'placeholder': 'http://NAS局域网IP:3032',
@@ -730,6 +763,7 @@ class MediaServerMsgLyrics(_PluginBase):
             "lyrics_online_fallback": True,
             "lyrics_public_url": "https://mp.playsong.cn",
             "cast_stream_url": "",
+            "cast_sync_offset": 0.9,
             "lyrics_path_mappings": "",
             "unplay_host": "",
             "aggregate_enabled": False,

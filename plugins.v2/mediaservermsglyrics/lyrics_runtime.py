@@ -31,14 +31,13 @@ class LyricsRuntime:
     TV_SOFTWARE_OUTPUT_WIDTH = 1920
     TV_SOFTWARE_OUTPUT_HEIGHT = 1080
     TV_FPS = 30
-    # 电视视频层保持静态封面取色背景，把全部 30 FPS 帧预算留给歌词滚动。
-    # 手机网页仍保留 GPU 微动渐变，不受这里影响。
-    TV_AMBIENT_FRAMES = 1
-    TV_AMBIENT_CYCLE = 28.0
-    TV_AMBIENT_FPS = 5
+    # 封面取色背景由独立线程低频更新；歌词 30 FPS 线程只复制最新完成帧。
+    TV_AMBIENT_CYCLE = 24.0
+    TV_AMBIENT_FPS = 3
+    TV_AMBIENT_IDLE_TIMEOUT = 5.0
     UNPLAY_DISCOVERY_TTL = 45
     UNPLAY_DISCOVERY_TIMEOUT = 2.2
-    PLEX_POLL_INTERVAL = 0.75
+    PLEX_POLL_INTERVAL = 0.5
     REMOTE_POSITION_EPSILON = 0.08
     REMOTE_SEEK_THRESHOLD = 2.5
     MAX_FORWARD_CORRECTION = 0.45
@@ -413,6 +412,7 @@ class LyricsRuntime:
         output_width, output_height, output_fps, output_label, transport_id = (
             self._tv_stream_profile(encoder_label)
         )
+        sync_offset = self._tv_sync_offset()
 
         now = time.time()
         request_token = secrets.token_urlsafe(9)
@@ -453,6 +453,7 @@ class LyricsRuntime:
             channel["output_width"] = output_width
             channel["output_height"] = output_height
             channel["output_fps"] = output_fps
+            channel["sync_offset"] = sync_offset
             title = str(session.get("title") or "实时歌词")
 
         public_url = str(getattr(self._plugin, "_lyrics_public_url", "") or "").rstrip("/")
@@ -528,11 +529,12 @@ class LyricsRuntime:
                     "ok": True,
                     "message": (
                         f"{device_name} 已开始播放 {output_label}（{encoder_label}，"
-                        f"{stream_path_label}），后续换歌会自动同步。"
+                        f"{stream_path_label}，歌词补偿 {sync_offset:+.1f}s），后续换歌会自动同步。"
                     ),
                     "channel": channel_id,
                     "transport": (
                         f"{output_label} · H.264 / MPEG-TS · {encoder_label} · {stream_path_label}"
+                        f" · 歌词 {sync_offset:+.1f}s"
                     ),
                     "device": {key: selected.get(key) for key in ("id", "name", "detail")},
                 }
@@ -687,6 +689,28 @@ class LyricsRuntime:
             "1080p30-lowlatency-h264-mpegts",
         )
 
+    def _tv_sync_offset(self) -> float:
+        """读取电视歌词补偿；正数让画面歌词提前，以抵消编码和播放器缓冲。"""
+        try:
+            return min(3.0, max(-2.0, float(getattr(self._plugin, "_cast_sync_offset", 0.9))))
+        except (TypeError, ValueError):
+            return 0.9
+
+    @staticmethod
+    def _apply_tv_sync_offset(state: Dict[str, Any], sync_offset: float) -> Dict[str, Any]:
+        """只补偿电视画面时间轴，不改变手机页面和 Plex 会话原始进度。"""
+        if (
+            not state.get("ok")
+            or not sync_offset
+            or state.get("state") not in {"playing", "buffering"}
+        ):
+            return state
+        adjusted_state = dict(state)
+        adjusted = max(0.0, float(state.get("position") or 0) + sync_offset)
+        duration = max(0.0, float(state.get("duration") or 0))
+        adjusted_state["position"] = min(adjusted, duration) if duration else adjusted
+        return adjusted_state
+
     def iter_tv_mpegts(self, channel_id: str, request_token: str):
         """把逐帧歌词画面实时编码成 Apple TV/UnPlay 易于解码的 H.264 MPEG-TS。"""
         ffmpeg_path = shutil.which("ffmpeg")
@@ -706,6 +730,7 @@ class LyricsRuntime:
         output_width, output_height, output_fps, output_label, _ = self._tv_stream_profile(
             encoder_label
         )
+        sync_offset = self._tv_sync_offset()
         command = [
             ffmpeg_path,
             "-hide_banner",
@@ -744,7 +769,7 @@ class LyricsRuntime:
         ]
         self._logger.info(
             f"电视歌词开始编码：{output_width}x{output_height} "
-            f"{output_fps} FPS，{encoder_label}，低延迟模式"
+            f"{output_fps} FPS，{encoder_label}，低延迟模式，歌词补偿 {sync_offset:+.1f}s"
         )
         process = subprocess.Popen(
             command,
@@ -770,6 +795,7 @@ class LyricsRuntime:
                         sid = str(channel.get("sid") or "")
                     # Plex sessions() 属于网络 I/O，绝不能卡住 30 FPS 视频生产线程。
                     state = self.get_state(sid, background_poll=True)
+                    state = self._apply_tv_sync_offset(state, sync_offset)
                     cover, _ = self.get_cover(sid)
                     image = self._render_tv_image(channel_id, sid, state, cover).convert("RGB")
                     if not process.stdin or process.stdin.closed:
@@ -1071,56 +1097,57 @@ class LyricsRuntime:
         sid: str,
         cover_bytes: Optional[bytes],
     ) -> Tuple[Image.Image, Tuple[Tuple[int, int, int], ...]]:
-        """返回预合成场景；逐帧阶段不再重复做模糊、玻璃和封面阴影。"""
+        """返回后台完成的最新动态场景；歌词线程自身不计算背景动画。"""
         cover_key = f"{sid}:{len(cover_bytes or b'')}"
+        worker_args = None
+        cache_hit = False
+        display_frame = None
+        palette = None
         with self._lock:
             cached = self._tv_scene_cache.get(channel_id)
-            if cached and cached.get("key") == cover_key:
-                frames = list(cached.get("frames") or [])
+            if (
+                cached
+                and cached.get("key") == cover_key
+                and cached.get("display_frame") is not None
+                and cached.get("palette")
+            ):
+                if not cached.get("animating"):
+                    cached["animating"] = True
+                    worker_args = (
+                        cached.get("background"),
+                        cached.get("palette"),
+                        cached.get("artwork"),
+                    )
+                display_frame = cached.get("display_frame").copy()
                 palette = cached.get("palette")
-                display_frame = cached.get("display_frame")
-                display_step = cached.get("display_step")
-            else:
-                frames = []
-                palette = None
-                display_frame = None
-                display_step = None
+                cache_hit = True
 
-        if frames and palette:
-            if len(frames) == 1:
-                return frames[0].copy(), palette
-            # 柔光背景只需低频更新；歌词和进度仍保持 30 FPS。
-            # 复用背景混合帧可避免每一帧都遍历 1080p 全画面。
-            step = int(time.monotonic() * self.TV_AMBIENT_FPS)
-            if display_frame is not None and display_step == step:
-                return display_frame.copy(), palette
-            phase_time = step / self.TV_AMBIENT_FPS
-            phase = (phase_time % self.TV_AMBIENT_CYCLE) / self.TV_AMBIENT_CYCLE
-            frame_position = phase * len(frames)
-            left_index = int(frame_position) % len(frames)
-            right_index = (left_index + 1) % len(frames)
-            blend = frame_position - int(frame_position)
-            display_frame = Image.blend(frames[left_index], frames[right_index], blend)
-            with self._lock:
-                cached = self._tv_scene_cache.get(channel_id)
-                if cached and cached.get("key") == cover_key:
-                    cached["display_frame"] = display_frame
-                    cached["display_step"] = step
-            return display_frame.copy(), palette
+        if cache_hit:
+            if worker_args:
+                threading.Thread(
+                    target=self._animate_tv_scene,
+                    args=(channel_id, cover_key, *worker_args),
+                    name=f"LyricsTVAmbient-{channel_id[:7]}",
+                    daemon=True,
+                ).start()
+            return display_frame, palette
 
         background, palette, artwork = self._tv_background(channel_id, sid, cover_bytes)
-        first = self._compose_tv_scene(background, palette, artwork, 0.0)
+        phase = (time.monotonic() % self.TV_AMBIENT_CYCLE) / self.TV_AMBIENT_CYCLE
+        first = self._compose_tv_scene(background, palette, artwork, phase)
         with self._lock:
             self._tv_scene_cache[channel_id] = {
                 "key": cover_key,
-                "frames": [first.copy()],
+                "display_frame": first.copy(),
                 "palette": palette,
-                "building": True,
+                "background": background,
+                "artwork": artwork,
+                "animating": True,
             }
         threading.Thread(
-            target=self._build_tv_scene_frames,
+            target=self._animate_tv_scene,
             args=(channel_id, cover_key, background, palette, artwork),
-            name=f"LyricsTVScene-{channel_id[:7]}",
+            name=f"LyricsTVAmbient-{channel_id[:7]}",
             daemon=True,
         ).start()
         return first, palette
@@ -1136,7 +1163,7 @@ class LyricsRuntime:
         self._draw_tv_artwork(scene, artwork.copy() if artwork else None, palette[0])
         return scene
 
-    def _build_tv_scene_frames(
+    def _animate_tv_scene(
         self,
         channel_id: str,
         cover_key: str,
@@ -1144,24 +1171,33 @@ class LyricsRuntime:
         palette: Tuple[Tuple[int, int, int], ...],
         artwork: Optional[Image.Image],
     ) -> None:
-        """在后台预生成一个首尾连续的慢速动态色场循环。"""
+        """在独立低频线程更新色场；即使生成变慢也不阻塞歌词视频帧。"""
+        interval = 1.0 / max(1, self.TV_AMBIENT_FPS)
         try:
-            for index in range(1, self.TV_AMBIENT_FRAMES):
-                if self._closed:
-                    return
-                phase = index / self.TV_AMBIENT_FRAMES
+            while not self._closed:
+                time.sleep(interval)
+                with self._lock:
+                    cached = self._tv_scene_cache.get(channel_id)
+                    channel = self._tv_channels.get(channel_id)
+                    if not cached or cached.get("key") != cover_key or not channel:
+                        return
+                    if time.time() - float(channel.get("last_seen_at") or 0) > self.TV_AMBIENT_IDLE_TIMEOUT:
+                        cached["animating"] = False
+                        return
+
+                phase = (time.monotonic() % self.TV_AMBIENT_CYCLE) / self.TV_AMBIENT_CYCLE
                 frame = self._compose_tv_scene(background, palette, artwork, phase)
                 with self._lock:
                     cached = self._tv_scene_cache.get(channel_id)
                     if not cached or cached.get("key") != cover_key:
                         return
-                    cached["frames"].append(frame)
+                    cached["display_frame"] = frame
+        except Exception as error:
+            self._logger.debug(f"电视歌词动态背景线程结束：{error}")
             with self._lock:
                 cached = self._tv_scene_cache.get(channel_id)
                 if cached and cached.get("key") == cover_key:
-                    cached["building"] = False
-        except Exception as error:
-            self._logger.debug(f"电视歌词预合成动态背景失败：{error}")
+                    cached["animating"] = False
 
     def _tv_background(
         self,
@@ -1306,9 +1342,9 @@ class LyricsRuntime:
             phase if phase is not None else (time.monotonic() % self.TV_AMBIENT_CYCLE) / self.TV_AMBIENT_CYCLE
         )
         specs = (
-            (palette[0], 0.19, 0.24, 0.055, 0.045, 84, 66, 54),
-            (palette[1], 0.78, 0.24, 0.048, 0.052, 78, 61, 44),
-            (palette[2], 0.7, 0.82, 0.06, 0.04, 92, 70, 38),
+            (palette[0], 0.19, 0.24, 0.086, 0.068, 88, 69, 66),
+            (palette[1], 0.78, 0.24, 0.074, 0.081, 82, 65, 56),
+            (palette[2], 0.7, 0.82, 0.092, 0.064, 96, 73, 48),
         )
         for index, (color, base_x, base_y, drift_x, drift_y, radius_x, radius_y, alpha) in enumerate(specs):
             x = int(small_width * (base_x + math.sin(angle + index * 1.9) * drift_x))

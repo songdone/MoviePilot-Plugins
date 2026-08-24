@@ -1,5 +1,9 @@
 # MoviePilot-Plugins
 
+> 本 Fork 新增 MoviePilot V2 插件：[媒体库服务器通知·实时歌词](./plugins.v2/mediaservermsglyrics/README.md)。
+> 在 MoviePilot 的插件市场设置中加入 `https://github.com/songdone/MoviePilot-Plugins`，即可搜索并在线安装。
+> 本 Fork 保留上游目录与市场索引结构，插件代码基于 GPL-3.0 的官方 `MediaServerMsg` 独立扩展。
+
 MoviePilot 官方插件仓库，也是默认插件市场的源码与索引仓库：
 <https://github.com/jxxghp/MoviePilot-Plugins>
 

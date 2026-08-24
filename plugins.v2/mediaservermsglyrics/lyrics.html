@@ -1,0 +1,1649 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="实时歌词">
+  <meta name="theme-color" content="#080a0d">
+  <title>实时歌词</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --accent: #d4a65b;
+      --accent-rgb: 212, 166, 91;
+      --tone-one-rgb: 212, 166, 91;
+      --tone-two-rgb: 91, 124, 166;
+      --tone-three-rgb: 126, 74, 118;
+      --ink: rgba(255, 255, 255, .96);
+      --muted: rgba(255, 255, 255, .56);
+      --quiet: rgba(255, 255, 255, .22);
+      --panel: rgba(8, 10, 13, .42);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: #050608;
+      font-family: -apple-system, "SF Pro Display", "PingFang SC", "Noto Sans SC", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, input { font: inherit; }
+
+    body {
+      display: grid;
+      place-items: center;
+    }
+
+    #app {
+      position: relative;
+      width: 100vw;
+      height: 100dvh;
+      min-height: 100svh;
+      overflow: hidden;
+      color: var(--ink);
+      isolation: isolate;
+      background: #080a0d;
+    }
+
+    .ambient {
+      position: absolute;
+      inset: -18%;
+      z-index: -5;
+      background: #090a0f;
+      overflow: hidden;
+    }
+
+    .ambient img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      filter: blur(92px) saturate(1.42) brightness(.46);
+      transform: scale(1.24) translate3d(-1.5%, -1%, 0);
+      opacity: .5;
+      transition: opacity .6s ease;
+      animation: artwork-drift 34s cubic-bezier(.45, 0, .55, 1) infinite alternate;
+      will-change: transform;
+    }
+
+    .ambient-color {
+      position: absolute;
+      inset: -22%;
+      z-index: -4;
+      overflow: hidden;
+      background:
+        radial-gradient(ellipse 42% 52% at 16% 18%, rgba(var(--tone-one-rgb), .62), transparent 72%),
+        radial-gradient(ellipse 40% 46% at 82% 16%, rgba(var(--tone-two-rgb), .47), transparent 74%),
+        radial-gradient(ellipse 46% 52% at 72% 88%, rgba(var(--tone-three-rgb), .42), transparent 76%),
+        radial-gradient(ellipse 36% 44% at 24% 82%, rgba(var(--tone-two-rgb), .28), transparent 76%);
+      filter: blur(48px) saturate(1.2);
+      transform: scale(1.13) translate3d(0, 0, 0);
+      opacity: .92;
+      transition: background .6s ease;
+      animation: color-field-drift 27s cubic-bezier(.45, 0, .55, 1) infinite alternate;
+      will-change: transform;
+    }
+
+    .ambient-color::before,
+    .ambient-color::after {
+      content: "";
+      position: absolute;
+      inset: 8%;
+      border-radius: 44%;
+      pointer-events: none;
+      will-change: transform;
+    }
+
+    .ambient-color::before {
+      background:
+        radial-gradient(ellipse at 32% 44%, rgba(var(--tone-three-rgb), .5), transparent 66%),
+        radial-gradient(ellipse at 78% 62%, rgba(var(--tone-one-rgb), .4), transparent 68%);
+      filter: blur(58px);
+      mix-blend-mode: screen;
+      opacity: .24;
+      animation: color-field-orbit 32s ease-in-out infinite alternate;
+    }
+
+    .ambient-color::after {
+      background:
+        radial-gradient(ellipse at 64% 28%, rgba(var(--tone-two-rgb), .55), transparent 67%),
+        radial-gradient(ellipse at 28% 76%, rgba(var(--tone-one-rgb), .34), transparent 70%);
+      filter: blur(66px);
+      mix-blend-mode: soft-light;
+      opacity: .32;
+      animation: color-field-orbit-reverse 38s ease-in-out infinite alternate;
+    }
+
+    .vignette {
+      position: absolute;
+      inset: 0;
+      z-index: -2;
+      background:
+        linear-gradient(180deg, rgba(2, 3, 5, .38), transparent 22%, transparent 72%, rgba(2, 3, 5, .72)),
+        radial-gradient(ellipse at center, transparent 30%, rgba(1, 2, 3, .42) 100%);
+      box-shadow: inset 0 0 150px rgba(0, 0, 0, .36);
+      pointer-events: none;
+    }
+
+    .noise {
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      opacity: .055;
+      pointer-events: none;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.75'/%3E%3C/svg%3E");
+    }
+
+    .shell {
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      padding:
+        max(18px, env(safe-area-inset-top))
+        20px
+        max(18px, env(safe-area-inset-bottom));
+    }
+
+    .topbar {
+      --album-art-size: 64px;
+      display: grid;
+      grid-template-columns: var(--album-art-size) minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 14px;
+      min-height: 72px;
+      animation: reveal .55s ease both;
+    }
+
+    .album-art-stack {
+      position: relative;
+      width: var(--album-art-size);
+      height: var(--album-art-size);
+      min-width: var(--album-art-size);
+      min-height: var(--album-art-size);
+      max-width: var(--album-art-size);
+      max-height: var(--album-art-size);
+      aspect-ratio: 1 / 1;
+      flex: 0 0 var(--album-art-size);
+      overflow: hidden;
+      border-radius: 15px;
+      background: rgba(255, 255, 255, .08);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, .32);
+    }
+
+    .album-art-card {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+      object-position: center;
+      border: 0;
+      border-radius: inherit;
+      opacity: 0;
+      transition: opacity .18s ease;
+    }
+
+    .album-art-card.ready { opacity: 1; }
+
+    .track { min-width: 0; }
+
+    .track strong, .track span {
+      display: block;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .track strong {
+      font-size: 17px;
+      line-height: 1.3;
+      letter-spacing: -.018em;
+    }
+
+    .track span {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .track .quality {
+      width: fit-content;
+      max-width: 100%;
+      margin-top: 8px;
+      overflow: hidden;
+      color: rgba(255, 255, 255, .48);
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: .025em;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .live-pill {
+      height: 32px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 11px;
+      border: 1px solid rgba(255, 255, 255, .12);
+      border-radius: 999px;
+      background: rgba(8, 10, 13, .32);
+      backdrop-filter: blur(18px) saturate(130%);
+      color: rgba(255, 255, 255, .72);
+      font-size: 10px;
+      font-weight: 760;
+      letter-spacing: .1em;
+      white-space: nowrap;
+    }
+
+    .live-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 5px rgba(var(--accent-rgb), .12), 0 0 16px rgba(var(--accent-rgb), .7);
+      animation: pulse 1.8s ease-in-out infinite;
+    }
+
+    .live-pill[data-state="paused"] .live-dot,
+    .live-pill[data-state="stopped"] .live-dot,
+    .live-pill[data-state="ended"] .live-dot {
+      animation: none;
+      background: rgba(255, 255, 255, .42);
+      box-shadow: none;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .cast-button {
+      height: 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 0 11px;
+      border: 1px solid rgba(255, 255, 255, .13);
+      border-radius: 999px;
+      background: rgba(8, 10, 13, .38);
+      backdrop-filter: blur(18px) saturate(130%);
+      color: rgba(255, 255, 255, .78);
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 650;
+      white-space: nowrap;
+      transition: border-color .2s ease, background .2s ease, color .2s ease, transform .2s ease;
+    }
+
+    .cast-button:hover {
+      border-color: rgba(var(--accent-rgb), .55);
+      background: rgba(var(--accent-rgb), .16);
+      color: #fff;
+    }
+
+    .cast-button:active { transform: scale(.97); }
+    .cast-button:disabled { cursor: wait; opacity: .58; }
+    .cast-button.active {
+      border-color: rgba(var(--accent-rgb), .46);
+      background: rgba(var(--accent-rgb), .18);
+      color: #fff;
+    }
+
+    .cast-button svg {
+      width: 15px;
+      height: 15px;
+      flex: none;
+    }
+
+    .lyrics-stage {
+      position: relative;
+      min-height: 0;
+      margin: 12px -4px 6px;
+      overflow: hidden;
+      scroll-behavior: auto;
+      mask-image: linear-gradient(transparent 0%, #000 14%, #000 84%, transparent 100%);
+      -webkit-mask-image: linear-gradient(transparent 0%, #000 14%, #000 84%, transparent 100%);
+    }
+
+    .lyrics {
+      min-height: 100%;
+      padding: 30vh 4px 34vh;
+    }
+
+    .lyric-line {
+      --lyric-clip: 100%;
+      min-height: 44px;
+      display: grid;
+      align-items: center;
+      margin: 4px 0;
+      padding: 4px 2px;
+      border: 0;
+      background: transparent;
+      color: var(--quiet);
+      font-size: clamp(19px, 5.35vw, 22px);
+      font-weight: 560;
+      line-height: 1.55;
+      letter-spacing: -.018em;
+      text-align: left;
+      white-space: pre-line;
+      transition: color .24s ease, opacity .24s ease, transform .24s cubic-bezier(.22, 1, .36, 1), text-shadow .24s ease;
+      opacity: .7;
+      transform-origin: left center;
+      will-change: transform, opacity;
+    }
+
+    .lyric-copy,
+    .lyric-fill {
+      grid-area: 1 / 1;
+      display: block;
+      min-width: 0;
+      color: inherit;
+      white-space: pre-line;
+    }
+
+    .lyric-fill {
+      color: #fff;
+      opacity: 0;
+      clip-path: inset(0 var(--lyric-clip) 0 0);
+      -webkit-clip-path: inset(0 var(--lyric-clip) 0 0);
+      pointer-events: none;
+      text-shadow: 0 0 30px rgba(var(--accent-rgb), .22);
+      will-change: clip-path;
+    }
+
+    .lyric-line.near {
+      color: rgba(255, 255, 255, .52);
+      opacity: .94;
+    }
+
+    .lyric-line.active {
+      color: rgba(255, 255, 255, .42);
+      font-weight: 720;
+      opacity: 1;
+      transform: translateX(5px) scale(1.025);
+    }
+
+    .lyric-line.active .lyric-fill { opacity: 1; }
+
+    .lyrics-stage.plain {
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, .2) transparent;
+    }
+
+    .lyrics-stage.plain .lyrics { padding-block: 28px; }
+
+    .lyrics-stage.plain .lyric-line {
+      min-height: 0;
+      color: rgba(255, 255, 255, .72);
+      opacity: 1;
+      font-weight: 500;
+    }
+
+    .empty-state {
+      height: 100%;
+      display: grid;
+      align-content: center;
+      gap: 10px;
+      padding: 32px 4px;
+      color: var(--muted);
+    }
+
+    .empty-state strong {
+      color: var(--ink);
+      font-size: 28px;
+      letter-spacing: -.03em;
+    }
+
+    .empty-state p {
+      max-width: 300px;
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.75;
+    }
+
+    .footer {
+      display: grid;
+      gap: 10px;
+      padding-top: 4px;
+      animation: reveal .55s .12s ease both;
+    }
+
+    .progress-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      color: rgba(255, 255, 255, .5);
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .source {
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .source b {
+      color: rgba(255, 255, 255, .78);
+      font-weight: 650;
+    }
+
+    .timeline {
+      position: relative;
+      height: 4px;
+      overflow: hidden;
+      border-radius: 99px;
+      background: rgba(255, 255, 255, .12);
+    }
+
+    .timeline span {
+      display: block;
+      width: 100%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, rgba(var(--accent-rgb), .76), #fff);
+      box-shadow: 0 0 16px rgba(var(--accent-rgb), .34);
+      transform: scaleX(0);
+      transform-origin: left center;
+      will-change: transform;
+    }
+
+    .connection {
+      min-height: 18px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: rgba(255, 255, 255, .4);
+      font-size: 10px;
+    }
+
+    .connection i {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, .34);
+    }
+
+    .connection.ok i { background: var(--accent); }
+    .connection.error i { background: #e07a67; }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: max(28px, calc(env(safe-area-inset-bottom) + 18px));
+      z-index: 20;
+      width: min(calc(100vw - 32px), 420px);
+      padding: 12px 15px;
+      border: 1px solid rgba(255, 255, 255, .13);
+      border-radius: 14px;
+      background: rgba(8, 10, 13, .9);
+      box-shadow: 0 18px 52px rgba(0, 0, 0, .38);
+      backdrop-filter: blur(24px) saturate(135%);
+      color: rgba(255, 255, 255, .86);
+      font-size: 12px;
+      line-height: 1.55;
+      text-align: center;
+      transform: translate(-50%, 14px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .22s ease, transform .22s ease;
+    }
+
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .toast.error { border-color: rgba(224, 122, 103, .42); }
+
+    .cast-picker[hidden] { display: none; }
+
+    .cast-picker {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      display: grid;
+      place-items: end center;
+      padding: 16px;
+    }
+
+    .cast-scrim {
+      position: absolute;
+      inset: 0;
+      border: 0;
+      background: rgba(0, 0, 0, .42);
+      opacity: 0;
+      transition: opacity .24s ease;
+    }
+
+    .cast-sheet {
+      position: relative;
+      width: min(100%, 480px);
+      max-height: min(72dvh, 620px);
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, .19);
+      border-radius: 25px;
+      background:
+        linear-gradient(145deg, rgba(255, 255, 255, .12), rgba(255, 255, 255, .045) 42%, rgba(var(--accent-rgb), .07)),
+        rgba(13, 15, 20, .76);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, .2),
+        0 28px 80px rgba(0, 0, 0, .48);
+      backdrop-filter: blur(34px) saturate(145%);
+      -webkit-backdrop-filter: blur(34px) saturate(145%);
+      transform: translateY(22px) scale(.985);
+      opacity: 0;
+      transition: transform .28s cubic-bezier(.22, 1, .36, 1), opacity .22s ease;
+    }
+
+    .cast-picker.open .cast-scrim { opacity: 1; }
+
+    .cast-picker.open .cast-sheet {
+      transform: translateY(0) scale(1);
+      opacity: 1;
+    }
+
+    .cast-sheet-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 22px 22px 16px;
+    }
+
+    .cast-sheet-header strong {
+      display: block;
+      font-size: 20px;
+      line-height: 1.25;
+      letter-spacing: -.025em;
+    }
+
+    .cast-sheet-header span {
+      display: block;
+      margin-top: 6px;
+      color: rgba(255, 255, 255, .48);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .cast-close {
+      width: 34px;
+      height: 34px;
+      flex: none;
+      border: 1px solid rgba(255, 255, 255, .13);
+      border-radius: 50%;
+      background: rgba(255, 255, 255, .075);
+      color: rgba(255, 255, 255, .76);
+      cursor: pointer;
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .cast-device-list {
+      max-height: 340px;
+      overflow-y: auto;
+      padding: 0 10px;
+      scrollbar-width: thin;
+    }
+
+    .cast-device-status {
+      min-height: 94px;
+      display: grid;
+      place-items: center;
+      padding: 22px;
+      color: rgba(255, 255, 255, .56);
+      font-size: 13px;
+      line-height: 1.7;
+      text-align: center;
+    }
+
+    .cast-device-row {
+      width: 100%;
+      min-height: 68px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 18px;
+      padding: 12px 12px;
+      border: 0;
+      border-top: 1px solid rgba(255, 255, 255, .09);
+      background: transparent;
+      color: #fff;
+      cursor: pointer;
+      text-align: left;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-appearance: none;
+      appearance: none;
+      user-select: none;
+      -webkit-user-select: none;
+      transition: background .18s ease, transform .18s ease;
+    }
+
+    .cast-device-row:first-child { border-top: 0; }
+    .cast-device-row:active { transform: scale(.985); }
+    .cast-device-row:disabled { cursor: wait; opacity: .62; }
+    .cast-device-row.connecting {
+      background: rgba(var(--accent-rgb), .14);
+      opacity: 1;
+    }
+
+    @media (hover: hover) and (pointer: fine) {
+      .cast-device-row:hover { background: rgba(255, 255, 255, .07); }
+      .cast-refresh:hover { background: rgba(255, 255, 255, .07); color: #fff; }
+    }
+
+    .cast-device-row strong,
+    .cast-device-row span { display: block; }
+
+    .cast-device-row strong {
+      font-size: 15px;
+      line-height: 1.3;
+    }
+
+    .cast-device-row span {
+      margin-top: 5px;
+      color: rgba(255, 255, 255, .45);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .cast-device-row b {
+      color: rgba(255, 255, 255, .46);
+      font-size: 24px;
+      font-weight: 350;
+    }
+
+    .cast-sheet-footer {
+      display: flex;
+      justify-content: flex-end;
+      padding: 14px 20px max(18px, env(safe-area-inset-bottom));
+      border-top: 1px solid rgba(255, 255, 255, .09);
+    }
+
+    .cast-refresh {
+      min-height: 34px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: rgba(255, 255, 255, .68);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    @keyframes reveal {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(.9); opacity: .76; }
+      50% { transform: scale(1.08); opacity: 1; }
+    }
+
+    @keyframes artwork-drift {
+      0% { transform: scale(1.24) translate3d(-1.5%, -1%, 0); }
+      50% { transform: scale(1.29) translate3d(1.8%, .8%, 0); }
+      100% { transform: scale(1.25) translate3d(-.4%, 1.7%, 0); }
+    }
+
+    @keyframes color-field-drift {
+      0% { transform: scale(1.13) translate3d(-1.5%, -1%, 0) rotate(-1deg); }
+      50% { transform: scale(1.18) translate3d(2.2%, 1.3%, 0) rotate(1.4deg); }
+      100% { transform: scale(1.14) translate3d(-.5%, 2.2%, 0) rotate(.2deg); }
+    }
+
+    @keyframes color-field-orbit {
+      0% { transform: translate3d(-3%, 1%, 0) scale(1.02); }
+      100% { transform: translate3d(4%, -3%, 0) scale(1.1); }
+    }
+
+    @keyframes color-field-orbit-reverse {
+      0% { transform: translate3d(3%, -2%, 0) scale(1.08); }
+      100% { transform: translate3d(-4%, 3%, 0) scale(1); }
+    }
+
+    @keyframes cover-float {
+      0%, 100% { transform: translateY(-2px); }
+      50% { transform: translateY(-5px); }
+    }
+
+    @media (min-width: 600px) and (max-width: 899px) {
+      .shell {
+        width: min(100%, 720px);
+        margin-inline: auto;
+        padding-inline: 32px;
+      }
+
+      .topbar {
+        --album-art-size: 70px;
+        grid-template-columns: var(--album-art-size) minmax(0, 1fr) auto;
+      }
+      .lyric-line { font-size: 23px; }
+    }
+
+    @media (max-width: 899px) {
+      .track .quality { display: none; }
+    }
+
+    @media (min-width: 900px) {
+      body {
+        background:
+          radial-gradient(circle at 50% 16%, rgba(212, 166, 91, .1), transparent 36%),
+          #111318;
+      }
+
+      #app {
+        width: 100vw;
+        height: 100dvh;
+        min-height: 560px;
+      }
+
+      .shell {
+        width: min(100%, 1320px);
+        margin-inline: auto;
+        grid-template-columns: minmax(260px, 360px) minmax(440px, 680px);
+        grid-template-rows: minmax(0, 1fr) auto;
+        justify-content: center;
+        column-gap: clamp(48px, 7vw, 112px);
+        padding: clamp(32px, 5vh, 58px) clamp(40px, 6vw, 82px);
+      }
+
+      .topbar {
+        --album-art-size: min(29vw, 38vh, 340px);
+        grid-column: 1;
+        grid-row: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        justify-content: center;
+        gap: 20px;
+      }
+
+      .album-art-stack {
+        margin: 8px 0 5px;
+      }
+
+      .album-art-stack {
+        border-radius: 22px;
+        box-shadow:
+          0 34px 78px rgba(0, 0, 0, .48),
+          0 8px 22px rgba(0, 0, 0, .32),
+          0 0 62px rgba(var(--accent-rgb), .12);
+      }
+
+      .track { width: 100%; }
+
+      .track strong {
+        font-size: clamp(24px, 2.3vw, 32px);
+        line-height: 1.25;
+      }
+
+      .track span {
+        margin-top: 8px;
+        font-size: 15px;
+      }
+
+      .track .quality { margin-top: 11px; font-size: 11px; }
+
+      .live-pill { height: 34px; font-size: 11px; }
+
+      .header-actions {
+        width: 100%;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+      }
+
+      .cast-button { height: 36px; padding-inline: 13px; }
+
+      .lyrics-stage {
+        grid-column: 2;
+        grid-row: 1 / 3;
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        mask-image: linear-gradient(transparent 0%, #000 9%, #000 91%, transparent 100%);
+        -webkit-mask-image: linear-gradient(transparent 0%, #000 9%, #000 91%, transparent 100%);
+      }
+
+      .lyrics { padding: 43vh 10px 46vh; }
+
+      .lyric-line {
+        min-height: 46px;
+        margin: 6px 0;
+        font-size: clamp(21px, 1.65vw, 25px);
+        line-height: 1.52;
+      }
+
+      .lyric-line.active { transform: translateX(7px) scale(1.02); }
+
+      .footer {
+        grid-column: 1;
+        grid-row: 2;
+        width: 100%;
+        padding-top: 18px;
+      }
+
+      .cast-picker { place-items: center; }
+    }
+
+    @media (max-width: 360px) {
+      .shell { padding-inline: 16px; }
+      .topbar {
+        --album-art-size: 56px;
+        grid-template-columns: var(--album-art-size) minmax(0, 1fr) auto;
+        gap: 11px;
+      }
+      .album-art-stack { border-radius: 13px; }
+      .live-pill { padding-inline: 9px; }
+      .live-pill .live-text { display: none; }
+      .cast-button { width: 34px; padding: 0; }
+      .cast-button .cast-text { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+
+      .ambient img,
+      .ambient-color,
+      .ambient-color::before,
+      .ambient-color::after { transform: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main id="app" data-screen-label="实时歌词">
+    <div class="ambient" aria-hidden="true"><img id="ambient-cover" alt=""></div>
+    <div class="ambient-color" aria-hidden="true"></div>
+    <div class="vignette" aria-hidden="true"></div>
+    <div class="noise" aria-hidden="true"></div>
+
+    <div class="shell">
+      <header class="topbar">
+        <div class="album-art-stack">
+          <img class="album-art-card" id="cover" alt="专辑封面" decoding="async">
+        </div>
+        <div class="track">
+          <strong id="title">正在连接 Plex…</strong>
+          <span id="artist">请稍候</span>
+          <div class="quality" id="quality" hidden></div>
+        </div>
+        <div class="header-actions">
+          <button class="cast-button" id="cast-button" type="button" hidden aria-label="投屏到 Apple TV" title="通过 UnPlay 投屏到 Apple TV">
+            <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 6.5h16v10H4z"></path>
+              <path d="m8.5 20 3.5-3.5 3.5 3.5"></path>
+            </svg>
+            <span class="cast-text" id="cast-label">投到电视</span>
+          </button>
+          <div class="live-pill" id="live-pill" data-state="loading">
+            <i class="live-dot"></i>
+            <span class="live-text" id="state-label">连接中</span>
+          </div>
+        </div>
+      </header>
+
+      <section class="lyrics-stage" aria-live="polite">
+        <div class="lyrics" id="lyrics">
+          <div class="empty-state" id="empty-state">
+            <strong>正在读取歌词</strong>
+            <p>优先读取歌曲旁边的本地歌词，缺失时自动查询在线歌词。</p>
+          </div>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <div class="progress-meta">
+          <span id="time">00:00 / 00:00</span>
+          <span class="source" id="source"><b>Plex</b> · 等待会话</span>
+        </div>
+        <div class="timeline" aria-label="播放进度"><span id="timeline-fill"></span></div>
+        <div class="connection" id="connection"><i></i><span>正在连接实时播放会话</span></div>
+      </footer>
+    </div>
+  </main>
+
+  <div class="cast-picker" id="cast-picker" hidden>
+    <button class="cast-scrim" id="cast-scrim" type="button" aria-label="关闭设备列表"></button>
+    <section class="cast-sheet" role="dialog" aria-modal="true" aria-labelledby="cast-picker-title">
+      <header class="cast-sheet-header">
+        <div>
+          <strong id="cast-picker-title">选择电视</strong>
+          <span>正在搜索同一局域网中的 UnPlay</span>
+        </div>
+        <button class="cast-close" id="cast-close" type="button" aria-label="关闭">×</button>
+      </header>
+      <div class="cast-device-list" id="cast-device-list">
+        <div class="cast-device-status">正在发现设备…</div>
+      </div>
+      <footer class="cast-sheet-footer">
+        <button class="cast-refresh" id="cast-refresh" type="button">重新搜索</button>
+      </footer>
+    </section>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <canvas id="palette" width="24" height="24" hidden></canvas>
+  <script>
+    (() => {
+      "use strict";
+
+      const params = new URLSearchParams(location.search);
+      const sid = params.get("sid") || "";
+      const demo = params.get("demo") === "1";
+      const stress = params.get("stress") === "1";
+      const elements = {
+        title: document.getElementById("title"),
+        artist: document.getElementById("artist"),
+        quality: document.getElementById("quality"),
+        cover: document.getElementById("cover"),
+        ambientCover: document.getElementById("ambient-cover"),
+        stateLabel: document.getElementById("state-label"),
+        livePill: document.getElementById("live-pill"),
+        castButton: document.getElementById("cast-button"),
+        castLabel: document.getElementById("cast-label"),
+        castPicker: document.getElementById("cast-picker"),
+        castScrim: document.getElementById("cast-scrim"),
+        castClose: document.getElementById("cast-close"),
+        castRefresh: document.getElementById("cast-refresh"),
+        castDeviceList: document.getElementById("cast-device-list"),
+        toast: document.getElementById("toast"),
+        stage: document.querySelector(".lyrics-stage"),
+        lyrics: document.getElementById("lyrics"),
+        time: document.getElementById("time"),
+        source: document.getElementById("source"),
+        timelineFill: document.getElementById("timeline-fill"),
+        connection: document.getElementById("connection"),
+        palette: document.getElementById("palette")
+      };
+
+      let snapshot = null;
+      let renderedLyricsKey = "";
+      let activeIndex = -1;
+      let pollTimer = null;
+      let pollInFlight = false;
+      let coverKey = "";
+      let clockInitialized = false;
+      let playheadPosition = 0;
+      let serverAnchorPosition = 0;
+      let serverAnchorAt = performance.now();
+      let clockAt = performance.now();
+      let trackIdentity = "";
+      let allowBackwardLyric = false;
+      let targetScrollTop = 0;
+      let currentScrollTop = 0;
+      let lyricLayoutFresh = true;
+      let animationFrame = 0;
+      let lastTimeLabel = "";
+      let demoPollCount = 0;
+      let castInFlight = false;
+      let castDevicesById = new Map();
+      let lastPointerActivationAt = 0;
+      const demoStartedAt = performance.now() - 46300;
+
+      const demoLyrics = [
+        [0, ""],
+        [7.2, "清晨的光落在窗边"],
+        [13.4, "让水声把疲惫轻轻带走"],
+        [20.8, "城市醒来以前"],
+        [27.6, "先把今天唱成一首歌"],
+        [35.1, "慢一点 也没有关系"],
+        [42.5, "所有心事都会找到出口"],
+        [50.6, "抬起头看见新的晴天"],
+        [58.9, "这一刻只跟着旋律向前"],
+        [67.4, "把每个普通日子轻轻收藏"],
+        [76.2, "下一句正在路上"]
+      ].map(([time, text], index, source) => ({
+        time,
+        end: source[index + 1]?.[0] || time + Math.max(2.4, text.length * .28),
+        text
+      }));
+
+      function demoState() {
+        const elapsed = (performance.now() - demoStartedAt) / 1000;
+        const jitterPattern = [0, -.72, .24, -.38, .16, -.2];
+        const reportedPosition = stress
+          ? elapsed + jitterPattern[demoPollCount++ % jitterPattern.length]
+          : elapsed;
+        return {
+          ok: true,
+          sid: "demo-track-v8",
+          cover_version: "demo-track-v8",
+          title: "我爱洗澡",
+          artist: "刘若英",
+          album: "我等你",
+          state: "playing",
+          position: Math.min(Math.max(reportedPosition, 0), 214),
+          duration: 214,
+          lyrics: demoLyrics,
+          synced: true,
+          word_synced: false,
+          lyrics_source: "本地 LRC",
+          codec: "FLAC",
+          sample_rate: 44100,
+          bit_depth: 16,
+          bitrate: 916,
+          quality_label: "FLAC · 44.1 kHz / 16-bit · 916 kbps",
+          cover_url: "demo-cover.jpg",
+          cover_ready: true,
+          _roundTripMs: 0,
+          cast_available: true,
+          cast_active: elements.castButton.classList.contains("active"),
+          updated_at: Date.now() / 1000
+        };
+      }
+
+      function endpoint(suffix, extra = {}) {
+        const base = location.pathname.replace(/\/$/, "");
+        const query = new URLSearchParams({ sid, ...extra });
+        return `${base}/${suffix}?${query.toString()}`;
+      }
+
+      async function fetchState() {
+        if (demo) return demoState();
+        if (!sid) throw new Error("歌词链接无效：缺少会话编号");
+        const requestStartedAt = performance.now();
+        const response = await fetch(endpoint("state"), {
+          cache: "no-store",
+          headers: { "Accept": "application/json" }
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.ok === false) {
+          throw new Error(data.message || `会话读取失败（${response.status}）`);
+        }
+        data._roundTripMs = performance.now() - requestStartedAt;
+        return data;
+      }
+
+      let toastTimer = 0;
+
+      function showToast(message, isError = false, duration = 4200) {
+        clearTimeout(toastTimer);
+        elements.toast.textContent = message;
+        elements.toast.className = `toast show${isError ? " error" : ""}`;
+        if (duration > 0) {
+          toastTimer = setTimeout(() => {
+            elements.toast.className = "toast";
+          }, duration);
+        }
+      }
+
+      function setDeviceStatus(message) {
+        elements.castDeviceList.replaceChildren();
+        const status = document.createElement("div");
+        status.className = "cast-device-status";
+        status.textContent = message;
+        elements.castDeviceList.append(status);
+      }
+
+      function closeCastPicker() {
+        elements.castPicker.classList.remove("open");
+        window.setTimeout(() => {
+          if (!elements.castPicker.classList.contains("open")) elements.castPicker.hidden = true;
+        }, 280);
+      }
+
+      function renderDevices(devices, message = "") {
+        elements.castDeviceList.replaceChildren();
+        castDevicesById = new Map();
+        if (!devices.length) {
+          setDeviceStatus(message || "没有发现 UnPlay。请确认 Apple TV 已打开 UnPlay，并与 MoviePilot 位于同一局域网。");
+          return;
+        }
+        for (const device of devices) {
+          const deviceId = String(device.id || "");
+          if (!deviceId) continue;
+          castDevicesById.set(deviceId, device);
+          const row = document.createElement("button");
+          row.className = "cast-device-row";
+          row.type = "button";
+          row.dataset.deviceId = deviceId;
+          row.setAttribute("aria-label", `投屏到 ${device.name || "Apple TV"}`);
+          const copy = document.createElement("span");
+          const name = document.createElement("strong");
+          name.textContent = device.name || "Apple TV";
+          const detail = document.createElement("span");
+          detail.textContent = device.detail || "UnPlay";
+          const chevron = document.createElement("b");
+          chevron.textContent = "›";
+          copy.append(name, detail);
+          row.append(copy, chevron);
+          elements.castDeviceList.append(row);
+        }
+      }
+
+      function activateCastRow(event) {
+        const row = event.target.closest?.(".cast-device-row");
+        if (!row || castInFlight || row.disabled) return;
+        const device = castDevicesById.get(row.dataset.deviceId || "");
+        if (!device) return;
+        event.preventDefault();
+        castToDevice(device.id, device.name, row);
+      }
+
+      async function searchCastDevices(force = false) {
+        setDeviceStatus("正在搜索同一局域网中的 UnPlay…");
+        elements.castRefresh.disabled = true;
+        try {
+          if (demo) {
+            await new Promise((resolve) => setTimeout(resolve, 520));
+            renderDevices([
+              { id: "demo-living-room", name: "客厅 Apple TV", detail: "UnPlay · tvOS 26" },
+              { id: "demo-bedroom", name: "卧室 Apple TV", detail: "UnPlay · tvOS 26" }
+            ]);
+            return;
+          }
+          const response = await fetch(endpoint("cast/devices", { force: force ? "true" : "false" }), {
+            cache: "no-store",
+            headers: { "Accept": "application/json" }
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok || data.ok === false) throw new Error(data.message || `设备发现失败（${response.status}）`);
+          renderDevices(Array.isArray(data.devices) ? data.devices : [], data.message || "");
+        } catch (error) {
+          setDeviceStatus(error.message || "无法搜索局域网设备");
+        } finally {
+          elements.castRefresh.disabled = false;
+        }
+      }
+
+      async function openCastPicker() {
+        if (elements.castButton.disabled) return;
+        elements.castPicker.hidden = false;
+        requestAnimationFrame(() => elements.castPicker.classList.add("open"));
+        await searchCastDevices(false);
+      }
+
+      async function castToDevice(deviceId, deviceName, row) {
+        if (castInFlight || elements.castButton.disabled) return;
+        castInFlight = true;
+        elements.castButton.disabled = true;
+        elements.castDeviceList.querySelectorAll(".cast-device-row").forEach((button) => {
+          button.disabled = true;
+        });
+        row.classList.add("connecting");
+        row.setAttribute("aria-busy", "true");
+        const rowIndicator = row.querySelector("b");
+        if (rowIndicator) rowIndicator.textContent = "连接中…";
+        elements.castLabel.textContent = "连接中";
+        showToast(`正在连接 ${deviceName || "Apple TV"}，等待电视确认视频流…`, false, 15000);
+        try {
+          if (demo) {
+            await new Promise((resolve) => setTimeout(resolve, 520));
+            elements.castButton.classList.add("active");
+            elements.castLabel.textContent = "电视播放中";
+            closeCastPicker();
+            showToast(`已投到 ${deviceName || "Apple TV"}，后续换歌会自动同步。`);
+            return;
+          }
+          const response = await fetch(endpoint("cast", { device_id: deviceId }), {
+            method: "POST",
+            cache: "no-store",
+            headers: { "Accept": "application/json" }
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok || data.ok === false) {
+            throw new Error(data.message || `投屏失败（${response.status}）`);
+          }
+          elements.castButton.classList.add("active");
+          elements.castLabel.textContent = "电视播放中";
+          closeCastPicker();
+          showToast(data.message || "电视歌词已启动。");
+        } catch (error) {
+          elements.castLabel.textContent = "重新投屏";
+          showToast(error.message || "无法连接 UnPlay", true);
+        } finally {
+          castInFlight = false;
+          elements.castButton.disabled = false;
+          elements.castDeviceList.querySelectorAll(".cast-device-row").forEach((button) => {
+            button.disabled = false;
+            button.classList.remove("connecting");
+            button.removeAttribute("aria-busy");
+            const indicator = button.querySelector("b");
+            if (indicator) indicator.textContent = "›";
+          });
+        }
+      }
+
+      function formatTime(value) {
+        const seconds = Math.max(0, Math.floor(Number(value) || 0));
+        const minute = Math.floor(seconds / 60);
+        return `${String(minute).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+      }
+
+      function stateText(state) {
+        return ({
+          playing: "播放中",
+          paused: "已暂停",
+          buffering: "缓冲中",
+          stopped: "已停止",
+          ended: "已结束",
+          loading: "连接中"
+        })[state] || "同步中";
+      }
+
+      function clamp(value, minimum, maximum) {
+        return Math.min(Math.max(value, minimum), maximum);
+      }
+
+      function advancePlayhead(now = performance.now()) {
+        const deltaTime = clamp((now - clockAt) / 1000, 0, .12);
+        clockAt = now;
+        if (!clockInitialized || !snapshot) return { position: playheadPosition, deltaTime };
+
+        if (snapshot.state === "playing") {
+          const serverEstimate = serverAnchorPosition + (now - serverAnchorAt) / 1000;
+          const drift = serverEstimate - playheadPosition;
+          const playbackRate = clamp(1 + drift * .18, .86, 1.22);
+          playheadPosition += deltaTime * playbackRate;
+        } else {
+          const forwardDrift = serverAnchorPosition - playheadPosition;
+          if (forwardDrift > .01) {
+            playheadPosition += forwardDrift * (1 - Math.exp(-deltaTime * 14));
+          }
+        }
+
+        const duration = Number(snapshot.duration) || 0;
+        playheadPosition = clamp(playheadPosition, 0, duration || Number.POSITIVE_INFINITY);
+        return { position: playheadPosition, deltaTime };
+      }
+
+      function syncPlayhead(data) {
+        const now = performance.now();
+        advancePlayhead(now);
+        const identity = `${data.title || ""}|${data.artist || ""}|${data.duration || 0}`;
+        const networkCompensation = data.state === "playing"
+          ? clamp((Number(data._roundTripMs) || 0) / 2000, 0, .35)
+          : 0;
+        const serverPosition = Math.max(0, (Number(data.position) || 0) + networkCompensation);
+        const drift = serverPosition - playheadPosition;
+        const newTrack = identity !== trackIdentity;
+        const hardSync = !clockInitialized || newTrack || Math.abs(drift) > 2.2;
+
+        snapshot = data;
+        serverAnchorPosition = serverPosition;
+        serverAnchorAt = now;
+        trackIdentity = identity;
+
+        if (hardSync) {
+          allowBackwardLyric = clockInitialized && drift < 0;
+          playheadPosition = serverPosition;
+          lyricLayoutFresh = newTrack || !clockInitialized;
+        } else if (data.state !== "playing" && serverPosition > playheadPosition) {
+          playheadPosition = serverPosition;
+        }
+
+        clockInitialized = true;
+        clockAt = now;
+      }
+
+      function lyricIndexAt(position) {
+        const lines = snapshot?.lyrics || [];
+        let low = 0;
+        let high = lines.length - 1;
+        let result = 0;
+        while (low <= high) {
+          const middle = (low + high) >> 1;
+          if ((Number(lines[middle].time) || 0) <= position + .04) {
+            result = middle;
+            low = middle + 1;
+          } else {
+            high = middle - 1;
+          }
+        }
+        return result;
+      }
+
+      function updateScrollTarget(instant = false) {
+        const active = elements.lyrics.querySelector(".lyric-line.active");
+        if (!active) return;
+        const focusRatio = window.innerWidth >= 900 ? .48 : .44;
+        const desired = active.offsetTop + active.offsetHeight / 2 - elements.stage.clientHeight * focusRatio;
+        const maximum = Math.max(0, elements.stage.scrollHeight - elements.stage.clientHeight);
+        targetScrollTop = clamp(desired, 0, maximum);
+        if (instant || lyricLayoutFresh) {
+          currentScrollTop = targetScrollTop;
+          elements.stage.scrollTop = targetScrollTop;
+          lyricLayoutFresh = false;
+        }
+      }
+
+      function updateActiveLyric(position) {
+        let nextIndex = lyricIndexAt(position);
+        if (nextIndex < activeIndex && !allowBackwardLyric) nextIndex = activeIndex;
+        if (nextIndex === activeIndex) return;
+
+        activeIndex = nextIndex;
+        const nodes = Array.from(elements.lyrics.querySelectorAll(".lyric-line"));
+        nodes.forEach((node, index) => {
+          node.classList.toggle("active", index === activeIndex);
+          node.classList.toggle("near", Math.abs(index - activeIndex) <= 1 && index !== activeIndex);
+        });
+        updateScrollTarget(false);
+        allowBackwardLyric = false;
+      }
+
+      function lyricProgress(line, index, position) {
+        const start = Number(line?.time) || 0;
+        const fallbackEnd = Number(snapshot?.lyrics?.[index + 1]?.time)
+          || Number(snapshot?.duration)
+          || start + Math.max(2.4, Array.from(line?.text || "").length * .28);
+        const end = Math.max(start + .08, Number(line?.end) || fallbackEnd);
+        const words = Array.isArray(line?.words) ? line.words : [];
+        if (!line?.word_synced || !words.length) return 1;
+
+        const unitsFor = (value) => Math.max(1, Array.from(String(value || "")).length);
+        const totalUnits = words.reduce((total, word) => total + unitsFor(word.text), 0);
+        let completed = 0;
+        for (let wordIndex = 0; wordIndex < words.length; wordIndex += 1) {
+          const word = words[wordIndex];
+          const units = unitsFor(word.text);
+          const wordStart = Number(word.time) || start;
+          const wordEnd = Math.max(
+            wordStart + .04,
+            Number(word.end) || Number(words[wordIndex + 1]?.time) || end
+          );
+          if (position >= wordEnd) {
+            completed += units;
+          } else if (position > wordStart) {
+            completed += units * clamp((position - wordStart) / (wordEnd - wordStart), 0, 1);
+            break;
+          } else {
+            break;
+          }
+        }
+        return clamp(completed / Math.max(1, totalUnits), 0, 1);
+      }
+
+      function updateWordHighlight(position) {
+        if (activeIndex < 0) return;
+        const line = snapshot?.lyrics?.[activeIndex];
+        const node = elements.lyrics.querySelector(`.lyric-line[data-index="${activeIndex}"]`);
+        if (!line || !node) return;
+        const progress = lyricProgress(line, activeIndex, position);
+        node.style.setProperty("--lyric-clip", `${((1 - progress) * 100).toFixed(3)}%`);
+      }
+
+      function renderLyrics(data) {
+        const lines = Array.isArray(data.lyrics) ? data.lyrics : [];
+        const key = JSON.stringify(lines);
+        if (key === renderedLyricsKey) return;
+        renderedLyricsKey = key;
+        activeIndex = -1;
+        lyricLayoutFresh = true;
+        targetScrollTop = 0;
+        currentScrollTop = 0;
+        elements.stage.scrollTop = 0;
+        elements.lyrics.replaceChildren();
+
+        if (!lines.length) {
+          const empty = document.createElement("div");
+          empty.className = "empty-state";
+          const strong = document.createElement("strong");
+          strong.textContent = data.lyrics_status === "loading" ? "正在读取歌词" : "暂未找到歌词";
+          const detail = document.createElement("p");
+          detail.textContent = data.message || "本地歌词不存在，在线歌词也没有匹配结果。";
+          empty.append(strong, detail);
+          elements.lyrics.append(empty);
+          return;
+        }
+
+        lines.forEach((line, index) => {
+          const node = document.createElement("div");
+          node.className = "lyric-line";
+          node.dataset.time = String(Number(line.time) || 0);
+          node.dataset.index = String(index);
+          const copy = document.createElement("span");
+          copy.className = "lyric-copy";
+          copy.textContent = line.text || "　";
+          const fill = document.createElement("span");
+          fill.className = "lyric-fill";
+          fill.setAttribute("aria-hidden", "true");
+          fill.textContent = line.text || "　";
+          node.append(copy, fill);
+          elements.lyrics.append(node);
+        });
+      }
+
+      function applyCover(data) {
+        const version = String(data.cover_version || data.sid || `${data.title || ""}:${data.artist || ""}`);
+        const url = demo
+          ? "demo-cover.jpg"
+          : (data.cover_url || endpoint("cover", { v: version }));
+        const key = `${version}:${Boolean(data.cover_ready)}`;
+        if (!url || key === coverKey) return;
+        coverKey = key;
+        elements.cover.classList.remove("ready");
+        elements.cover.removeAttribute("src");
+        elements.ambientCover.removeAttribute("src");
+        if (!demo && !data.cover_ready) return;
+        const image = new Image();
+        image.decoding = "async";
+        image.onload = () => {
+          if (coverKey !== key) return;
+          elements.cover.src = url;
+          elements.cover.classList.add("ready");
+          elements.ambientCover.src = url;
+          extractPalette(image);
+        };
+        image.onerror = () => {
+          if (coverKey !== key) return;
+          coverKey = "";
+          window.setTimeout(() => applyCover(data), 1200);
+        };
+        image.src = url;
+      }
+
+      function extractPalette(image) {
+        try {
+          const context = elements.palette.getContext("2d", { willReadFrequently: true });
+          context.clearRect(0, 0, 24, 24);
+          context.drawImage(image, 0, 0, 24, 24);
+          const pixels = context.getImageData(0, 0, 24, 24).data;
+          const buckets = new Map();
+          const usable = [];
+
+          for (let index = 0; index < pixels.length; index += 4) {
+            const r = pixels[index];
+            const g = pixels[index + 1];
+            const b = pixels[index + 2];
+            const brightness = (r + g + b) / 3;
+            const saturation = Math.max(r, g, b) - Math.min(r, g, b);
+            if (brightness < 16 || brightness > 242) continue;
+            usable.push([r, g, b]);
+            const key = `${r >> 4}:${g >> 4}:${b >> 4}`;
+            const bucket = buckets.get(key) || { count: 0, red: 0, green: 0, blue: 0, saturation: 0, brightness: 0 };
+            bucket.count += 1;
+            bucket.red += r;
+            bucket.green += g;
+            bucket.blue += b;
+            bucket.saturation += saturation;
+            bucket.brightness += brightness;
+            buckets.set(key, bucket);
+          }
+          if (!usable.length) return;
+
+          const ranked = Array.from(buckets.values()).map((bucket) => {
+            const color = [bucket.red, bucket.green, bucket.blue].map((value) => Math.round(value / bucket.count));
+            const saturation = bucket.saturation / bucket.count;
+            const brightness = bucket.brightness / bucket.count;
+            return {
+              color,
+              score: bucket.count * (.7 + saturation / 92) * (.72 + brightness / 255)
+            };
+          }).sort((left, right) => right.score - left.score);
+
+          const distance = (left, right) => Math.hypot(
+            left[0] - right[0],
+            left[1] - right[1],
+            left[2] - right[2]
+          );
+          const selected = [];
+          for (const candidate of ranked) {
+            if (!selected.length || selected.every((color) => distance(color, candidate.color) > 52)) {
+              selected.push(candidate.color);
+            }
+            if (selected.length === 3) break;
+          }
+
+          const average = [0, 1, 2].map((channel) => Math.round(
+            usable.reduce((total, color) => total + color[channel], 0) / usable.length
+          ));
+          if (!selected.length) selected.push(average);
+          const mix = (left, right, amount) => left.map((value, index) => Math.round(value * (1 - amount) + right[index] * amount));
+          while (selected.length < 3) {
+            selected.push(selected.length === 1
+              ? mix(selected[0], average, .46)
+              : mix(selected[0], [24, 28, 38], .34));
+          }
+
+          const normalize = (color, targetPeak = 184) => {
+            const peak = Math.max(...color, 1);
+            const scale = peak < 82 ? 82 / peak : (peak > 218 ? 218 / peak : 1);
+            return color.map((value) => Math.round(Math.min(232, Math.max(20, value * scale + targetPeak * .035))));
+          };
+          const tones = selected.slice(0, 3).map((color) => normalize(color));
+          const accent = normalize(selected[0], 172).map((value) => Math.min(235, Math.round(value * 1.08 + 12)));
+          const root = document.documentElement.style;
+          root.setProperty("--accent-rgb", accent.join(", "));
+          root.setProperty("--accent", `rgb(${accent.join(", ")})`);
+          root.setProperty("--tone-one-rgb", tones[0].join(", "));
+          root.setProperty("--tone-two-rgb", tones[1].join(", "));
+          root.setProperty("--tone-three-rgb", tones[2].join(", "));
+        } catch (_) {
+          // 同源封面代理失败时继续使用默认强调色。
+        }
+      }
+
+      function renderSnapshot(data) {
+        syncPlayhead(data);
+        elements.title.textContent = data.title || "未知歌曲";
+        elements.artist.textContent = [data.artist, data.album].filter(Boolean).join(" · ") || "未知歌手";
+        elements.quality.textContent = data.quality_label || "";
+        elements.quality.hidden = !data.quality_label;
+        elements.livePill.dataset.state = data.state || "loading";
+        elements.stateLabel.textContent = stateText(data.state);
+        const footerDetail = window.matchMedia("(max-width: 899px)").matches && data.quality_label
+          ? data.quality_label
+          : (data.lyrics_source || "歌词待匹配");
+        elements.source.innerHTML = `<b>Plex</b> · ${escapeText(footerDetail)}`;
+        elements.connection.className = "connection ok";
+        elements.connection.querySelector("span").textContent = data.synced === false
+          ? "歌词没有时间轴，将以全文模式显示"
+          : (data.word_synced ? "已连接 Plex · 精确逐字时间轴" : "已连接 Plex · 整行同步歌词");
+        elements.castButton.hidden = !data.cast_available;
+        elements.castButton.classList.toggle("active", Boolean(data.cast_active));
+        if (!elements.castButton.disabled) {
+          elements.castLabel.textContent = data.cast_active ? "电视播放中" : "投到电视";
+        }
+        elements.stage.classList.toggle("plain", data.synced === false);
+        renderLyrics(data);
+        applyCover(data);
+      }
+
+      function escapeText(value) {
+        const node = document.createElement("span");
+        node.textContent = String(value || "");
+        return node.innerHTML;
+      }
+
+      function showError(error) {
+        elements.livePill.dataset.state = "stopped";
+        elements.stateLabel.textContent = "连接失败";
+        elements.connection.className = "connection error";
+        elements.connection.querySelector("span").textContent = error.message || "无法连接歌词会话";
+        if (!snapshot) {
+          elements.title.textContent = "歌词页面暂不可用";
+          elements.artist.textContent = "请从新的播放通知重新打开";
+          renderLyrics({ lyrics: [], lyrics_status: "error", message: error.message });
+        }
+      }
+
+      function updateFrame(now) {
+        const { position, deltaTime } = advancePlayhead(now);
+        const duration = Math.max(Number(snapshot?.duration) || 0, 0);
+        const timeLabel = `${formatTime(position)} / ${formatTime(duration)}`;
+        if (timeLabel !== lastTimeLabel) {
+          elements.time.textContent = timeLabel;
+          lastTimeLabel = timeLabel;
+        }
+        const progress = duration ? clamp(position / duration, 0, 1) : 0;
+        elements.timelineFill.style.transform = `scaleX(${progress})`;
+
+        if (snapshot?.synced !== false && Array.isArray(snapshot?.lyrics) && snapshot.lyrics.length) {
+          updateActiveLyric(position);
+          updateWordHighlight(position);
+          currentScrollTop += (targetScrollTop - currentScrollTop) * (1 - Math.exp(-deltaTime * 8));
+          if (Math.abs(targetScrollTop - currentScrollTop) < .15) currentScrollTop = targetScrollTop;
+          elements.stage.scrollTop = currentScrollTop;
+        }
+        animationFrame = requestAnimationFrame(updateFrame);
+      }
+
+      async function poll() {
+        if (pollInFlight) return;
+        pollInFlight = true;
+        clearTimeout(pollTimer);
+        try {
+          renderSnapshot(await fetchState());
+        } catch (error) {
+          showError(error);
+        } finally {
+          pollInFlight = false;
+          pollTimer = setTimeout(poll, demo ? 1400 : 1200);
+        }
+      }
+
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+          clockAt = performance.now();
+          clearTimeout(pollTimer);
+          poll();
+        }
+      });
+      elements.castButton.addEventListener("click", openCastPicker);
+      elements.castScrim.addEventListener("click", closeCastPicker);
+      elements.castClose.addEventListener("click", closeCastPicker);
+      elements.castRefresh.addEventListener("click", () => searchCastDevices(true));
+      elements.castDeviceList.addEventListener("pointerup", (event) => {
+        lastPointerActivationAt = performance.now();
+        activateCastRow(event);
+      });
+      elements.castDeviceList.addEventListener("click", (event) => {
+        if (performance.now() - lastPointerActivationAt < 700) return;
+        activateCastRow(event);
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !elements.castPicker.hidden) closeCastPicker();
+      });
+      window.addEventListener("resize", () => updateScrollTarget(true));
+      window.addEventListener("beforeunload", () => {
+        clearTimeout(pollTimer);
+        cancelAnimationFrame(animationFrame);
+      });
+      animationFrame = requestAnimationFrame(updateFrame);
+      poll();
+    })();
+  </script>
+</body>
+</html>

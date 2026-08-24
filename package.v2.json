@@ -180,6 +180,25 @@
       "v1.4": "MoviePilot V2 版本媒体库服务器通知插件"
     }
   },
+  "MediaServerMsgLyrics": {
+    "v3": false,
+    "name": "媒体库服务器通知·实时歌词",
+    "description": "发送媒体服务器通知；为 Plex 音乐提供实时歌词页与 UnPlay Apple TV 独立投屏。",
+    "labels": "消息通知,媒体库,音乐",
+    "version": "1.1.6",
+    "icon": "mediaplay.png",
+    "author": "PlaySong",
+    "level": 1,
+    "release": true,
+    "history": {
+      "v1.1.6": "普通 LRC 使用整行高亮；增强 LRC 支持精确逐字歌词；完善 GitHub 在线安装",
+      "v1.1.5": "修复 iOS 封面显示与切歌封面缓存；增加增强 LRC 逐字时间轴",
+      "v1.1.4": "Apple TV 投屏升级为 4K/30 FPS 并支持 Intel Quick Sync",
+      "v1.1.3": "UnPlay 改用低延迟 H.264/MPEG-TS 并修复投屏状态判断",
+      "v1.1.0": "增加 Apple TV / UnPlay 非镜像投屏与实时音质信息",
+      "v1.0.0": "基于媒体库服务器通知插件增加 Plex 实时歌词页面"
+    }
+  },
   "ChatGPT": {
     "name": "ChatGPT",
     "description": "大模型对话与媒体识别增强。",

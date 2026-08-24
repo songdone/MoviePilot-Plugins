@@ -65,6 +65,7 @@ class LyricsRuntime:
             ],
         ] = {}
         self._tv_scene_cache: Dict[str, Dict[str, Any]] = {}
+        self._tv_info_cache: Dict[str, Dict[str, Any]] = {}
         self._tv_lyrics_cache: Dict[str, Dict[str, Any]] = {}
         self._tv_encoder_cache: Optional[Tuple[str, List[str], List[str]]] = None
         self._font_cache: Dict[int, ImageFont.FreeTypeFont] = {}
@@ -82,6 +83,7 @@ class LyricsRuntime:
             self._unplay_devices_at = 0.0
             self._tv_background_cache.clear()
             self._tv_scene_cache.clear()
+            self._tv_info_cache.clear()
             self._tv_lyrics_cache.clear()
 
     def handle_event(self, event_info: Any) -> Optional[str]:
@@ -889,6 +891,7 @@ class LyricsRuntime:
         finally:
             self._tv_background_cache.pop(channel_id, None)
             self._tv_scene_cache.pop(channel_id, None)
+            self._tv_info_cache.pop(channel_id, None)
             self._tv_lyrics_cache.pop(channel_id, None)
 
     def tv_channel_exists(self, channel_id: str, request_token: str = "") -> bool:
@@ -917,6 +920,7 @@ class LyricsRuntime:
             channel["last_seen_at"] = now
             self._tv_background_cache.pop(channel_id, None)
             self._tv_scene_cache.pop(channel_id, None)
+            self._tv_info_cache.pop(channel_id, None)
             self._tv_lyrics_cache.pop(channel_id, None)
 
     def _resolve_session_sid_locked(self, sid: str) -> str:
@@ -1025,21 +1029,17 @@ class LyricsRuntime:
         quality_label = str(state.get("quality_label") or self._quality_label(state))
         playback_state = str(state.get("state") or "loading")
 
-        # Apple Music 式左侧专辑信息：居中、克制，不使用内容玻璃卡片。
-        self._draw_text(draw, (px(257), px(506)), self._ellipsize(draw, title, px(24), px(350)), px(24), (255, 255, 255, 242), "mm", 1)
-        byline = " · ".join(part for part in (artist, album) if part)
-        self._draw_text(draw, (px(257), px(541)), self._ellipsize(draw, byline, px(17), px(350)), px(17), (255, 255, 255, 155), "mm")
-        if quality_label:
-            quality_text = self._ellipsize(draw, quality_label, px(15), px(360))
-            self._draw_text(draw, (px(257), px(576)), quality_text, px(15), (255, 255, 255, 112), "mm")
-        if playback_state in {"paused", "buffering", "ended", "stopped"}:
-            status_label = {
-                "paused": "已暂停",
-                "buffering": "正在缓冲",
-                "ended": "等待下一首",
-                "stopped": "等待下一首",
-            }[playback_state]
-            self._draw_text(draw, (px(257), px(608)), status_label, px(14), (255, 255, 255, 86), "mm")
+        # 歌曲信息随歌曲变化而不是随视频帧变化，缓存为小型透明图层。
+        # 放大字号后仍只在切歌或播放状态变化时排版一次。
+        self._draw_tv_info(
+            canvas,
+            channel_id,
+            title,
+            artist,
+            album,
+            quality_label,
+            playback_state,
+        )
 
         lyrics = state.get("lyrics") if isinstance(state.get("lyrics"), list) else []
         if not lyrics:
@@ -1080,6 +1080,83 @@ class LyricsRuntime:
         self._draw_text(draw, (bar_left, px(689)), self._format_time(position), px(14), (255, 255, 255, 84), "la")
         self._draw_text(draw, (bar_right, px(689)), self._format_time(duration), px(14), (255, 255, 255, 84), "ra")
         return canvas
+
+    def _draw_tv_info(
+        self,
+        canvas: Image.Image,
+        channel_id: str,
+        title: str,
+        artist: str,
+        album: str,
+        quality_label: str,
+        playback_state: str,
+    ) -> None:
+        """绘制与进度区底部对齐的左侧歌曲信息，并按歌曲缓存排版结果。"""
+        scale = self.TV_WIDTH / 1280
+        px = lambda value: round(value * scale)
+        cache_key = (title, artist, album, quality_label, playback_state)
+        origin = (px(22), px(500))
+
+        with self._lock:
+            cached = self._tv_info_cache.get(channel_id)
+            layer = cached.get("layer") if cached and cached.get("key") == cache_key else None
+
+        if layer is None:
+            layer = Image.new("RGBA", (px(470), px(170)), (0, 0, 0, 0))
+            info_draw = ImageDraw.Draw(layer, "RGBA")
+            center_x = px(257) - origin[0]
+            title_y = px(544) - origin[1]
+            byline_y = px(590) - origin[1]
+            quality_y = px(630) - origin[1]
+            status_y = px(650) - origin[1]
+
+            self._draw_text(
+                info_draw,
+                (center_x, title_y),
+                self._ellipsize(info_draw, title, px(30), px(390)),
+                px(30),
+                (255, 255, 255, 244),
+                "mm",
+                1,
+            )
+            byline = " · ".join(part for part in (artist, album) if part)
+            self._draw_text(
+                info_draw,
+                (center_x, byline_y),
+                self._ellipsize(info_draw, byline, px(21), px(400)),
+                px(21),
+                (255, 255, 255, 170),
+                "mm",
+            )
+            if quality_label:
+                quality_text = self._ellipsize(info_draw, quality_label, px(18), px(420))
+                self._draw_text(
+                    info_draw,
+                    (center_x, quality_y),
+                    quality_text,
+                    px(18),
+                    (255, 255, 255, 138),
+                    "mm",
+                )
+            if playback_state in {"paused", "buffering", "ended", "stopped"}:
+                status_label = {
+                    "paused": "已暂停",
+                    "buffering": "正在缓冲",
+                    "ended": "等待下一首",
+                    "stopped": "等待下一首",
+                }[playback_state]
+                self._draw_text(
+                    info_draw,
+                    (center_x, status_y),
+                    status_label,
+                    px(15),
+                    (255, 255, 255, 108),
+                    "mm",
+                )
+            with self._lock:
+                self._tv_info_cache[channel_id] = {"key": cache_key, "layer": layer}
+
+        canvas.paste(layer, origin, layer)
 
     def _render_tv_frame(
         self,
@@ -1370,14 +1447,6 @@ class LyricsRuntime:
         glass_box = tuple(px(value) for value in (77, 138, 437, 480))
         glass_size = (glass_box[2] - glass_box[0], glass_box[3] - glass_box[1])
 
-        self._paste_tv_shadow(
-            canvas,
-            tuple(px(value) for value in (72, 142, 442, 492)),
-            radius=px(34),
-            blur_radius=px(22),
-            alpha=106,
-        )
-
         glass = canvas.crop(glass_box).filter(ImageFilter.GaussianBlur(px(13))).convert("RGB")
         glass_tint = self._mix_color(accent, (238, 244, 255), 0.58)
         glass = Image.blend(glass, Image.new("RGB", glass_size, glass_tint), 0.1).convert("RGBA")
@@ -1386,15 +1455,15 @@ class LyricsRuntime:
         canvas.paste(glass, glass_box[:2], glass_mask)
 
         draw = ImageDraw.Draw(canvas, "RGBA")
-        draw.rounded_rectangle(glass_box, radius=px(31), fill=(255, 255, 255, 13), outline=(255, 255, 255, 56), width=max(1, px(1)))
+        draw.rounded_rectangle(glass_box, radius=px(31), fill=(255, 255, 255, 18), outline=(255, 255, 255, 72), width=max(1, px(1)))
 
         cover_box = tuple(px(value) for value in (92, 126, 422, 456))
         self._paste_tv_shadow(
             canvas,
-            tuple(px(value) for value in (87, 132, 427, 468)),
+            tuple(px(value) for value in (89, 132, 425, 464)),
             radius=px(22),
-            blur_radius=px(17),
-            alpha=142,
+            blur_radius=px(16),
+            alpha=48,
         )
 
         if artwork:
@@ -2306,4 +2375,5 @@ class LyricsRuntime:
                 self._tv_channel_keys.pop(channel.get("playback_key"), None)
             self._tv_background_cache.pop(channel_id, None)
             self._tv_scene_cache.pop(channel_id, None)
+            self._tv_info_cache.pop(channel_id, None)
             self._tv_lyrics_cache.pop(channel_id, None)

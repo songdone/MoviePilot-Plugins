@@ -28,8 +28,12 @@ class LyricsRuntime:
     TV_HEIGHT = 1080
     TV_OUTPUT_WIDTH = 3840
     TV_OUTPUT_HEIGHT = 2160
+    TV_SOFTWARE_OUTPUT_WIDTH = 1920
+    TV_SOFTWARE_OUTPUT_HEIGHT = 1080
     TV_FPS = 30
-    TV_AMBIENT_FRAMES = 6
+    # 电视视频层保持静态封面取色背景，把全部 30 FPS 帧预算留给歌词滚动。
+    # 手机网页仍保留 GPU 微动渐变，不受这里影响。
+    TV_AMBIENT_FRAMES = 1
     TV_AMBIENT_CYCLE = 28.0
     TV_AMBIENT_FPS = 5
     UNPLAY_DISCOVERY_TTL = 45
@@ -144,6 +148,7 @@ class LyricsRuntime:
                         "last_remote_position_at": now,
                         "last_seen_at": now,
                         "last_poll_at": 0.0,
+                        "poll_inflight": False,
                         "lyrics": [],
                         "synced": True,
                         "lyrics_status": "loading",
@@ -187,8 +192,8 @@ class LyricsRuntime:
                     session["expires_at"] = min(session["expires_at"], now + 30 * 60)
             return None
 
-    def get_state(self, sid: str) -> Dict[str, Any]:
-        """返回页面消费的会话快照；必要时限频查询 Plex sessions。"""
+    def get_state(self, sid: str, background_poll: bool = False) -> Dict[str, Any]:
+        """返回会话快照；电视逐帧渲染时把 Plex 网络查询放到后台。"""
         now = time.time()
         should_poll = False
         with self._lock:
@@ -197,12 +202,25 @@ class LyricsRuntime:
             session = self._sessions.get(resolved_sid)
             if not session:
                 return {"ok": False, "message": "歌词会话已失效，请从新的播放通知重新打开。"}
-            if now - float(session.get("last_poll_at") or 0) >= self.PLEX_POLL_INTERVAL:
+            if (
+                now - float(session.get("last_poll_at") or 0) >= self.PLEX_POLL_INTERVAL
+                and not session.get("poll_inflight")
+            ):
                 session["last_poll_at"] = now
                 should_poll = session.get("state") not in {"stopped", "ended"}
+                if should_poll:
+                    session["poll_inflight"] = True
 
         if should_poll:
-            self._refresh_plex_session(resolved_sid)
+            if background_poll:
+                threading.Thread(
+                    target=self._run_plex_poll,
+                    args=(resolved_sid,),
+                    name=f"LyricsPlexPoll-{resolved_sid[:7]}",
+                    daemon=True,
+                ).start()
+            else:
+                self._run_plex_poll(resolved_sid)
 
         now = time.time()
         with self._lock:
@@ -392,6 +410,9 @@ class LyricsRuntime:
                 "message": "MoviePilot 容器中没有找到 FFmpeg，无法生成 Apple TV 可播放的 H.264 电视流。",
             }
         encoder_label, _, _ = self._tv_encoder_config(ffmpeg_path)
+        output_width, output_height, output_fps, output_label, transport_id = (
+            self._tv_stream_profile(encoder_label)
+        )
 
         now = time.time()
         request_token = secrets.token_urlsafe(9)
@@ -427,15 +448,25 @@ class LyricsRuntime:
             channel["viewer_connected_at"] = None
             channel["stream_ready_at"] = None
             channel["cast_confirmed_at"] = None
-            channel["transport"] = "4k30-h264-mpegts"
+            channel["transport"] = transport_id
             channel["encoder"] = encoder_label
+            channel["output_width"] = output_width
+            channel["output_height"] = output_height
+            channel["output_fps"] = output_fps
             title = str(session.get("title") or "实时歌词")
 
         public_url = str(getattr(self._plugin, "_lyrics_public_url", "") or "").rstrip("/")
-        if not public_url:
-            return {"ok": False, "message": "歌词页公网地址为空，无法生成电视直播流地址。"}
+        cast_stream_url = str(getattr(self._plugin, "_cast_stream_url", "") or "").rstrip("/")
+        stream_base_url = cast_stream_url or public_url
+        parsed_stream_url = urlparse(stream_base_url)
+        if not stream_base_url or parsed_stream_url.scheme not in {"http", "https"} or not parsed_stream_url.netloc:
+            return {
+                "ok": False,
+                "message": "电视流地址无效，请填写 http(s)://NAS地址:端口，或检查歌词页公网地址。",
+            }
+        stream_path_label = "局域网直连" if cast_stream_url else "公网/反向代理"
         stream_url = (
-            f"{public_url}/api/v1/plugin/MediaServerMsgLyrics/lyrics/tv.ts"
+            f"{stream_base_url}/api/v1/plugin/MediaServerMsgLyrics/lyrics/tv.ts"
             f"?channel={channel_id}&v={request_token}"
         )
         cast_title = f"实时歌词 · {title} · {request_token[-5:]}"
@@ -495,9 +526,14 @@ class LyricsRuntime:
                         current["cast_confirmed_at"] = confirmed_at
                 return {
                     "ok": True,
-                    "message": f"{device_name} 已开始播放 4K/30（{encoder_label}），后续换歌会自动同步。",
+                    "message": (
+                        f"{device_name} 已开始播放 {output_label}（{encoder_label}，"
+                        f"{stream_path_label}），后续换歌会自动同步。"
+                    ),
                     "channel": channel_id,
-                    "transport": f"4K / 30 FPS · H.264 / MPEG-TS · {encoder_label}",
+                    "transport": (
+                        f"{output_label} · H.264 / MPEG-TS · {encoder_label} · {stream_path_label}"
+                    ),
                     "device": {key: selected.get(key) for key in ("id", "name", "detail")},
                 }
             time.sleep(0.45)
@@ -509,7 +545,7 @@ class LyricsRuntime:
         if not stream_ready:
             message = (
                 "UnPlay 已收到投屏命令，但没有访问歌词视频流（可能会在电视上显示 404）。"
-                "请确认 mp.playsong.cn 的 /lyrics/tv.ts 长连接没有被反向代理拦截。"
+                f"请确认 {parsed_stream_url.netloc} 能从 Apple TV 访问，且 /lyrics/tv.ts 长连接没有被拦截。"
             )
         else:
             message = (
@@ -525,7 +561,7 @@ class LyricsRuntime:
         }
 
     def _tv_encoder_config(self, ffmpeg_path: str) -> Tuple[str, List[str], List[str]]:
-        """优先启用 Intel Quick Sync；设备未映射时自动回退 libx264。"""
+        """优先使用 4K Quick Sync；软件编码自动切到低延迟 1080p。"""
         if self._tv_encoder_cache:
             return self._tv_encoder_cache
 
@@ -565,7 +601,7 @@ class LyricsRuntime:
                         "-",
                     ],
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
                     timeout=6,
                     check=False,
                 )
@@ -584,6 +620,10 @@ class LyricsRuntime:
                             "17",
                             "-look_ahead",
                             "0",
+                            "-async_depth",
+                            "1",
+                            "-bf",
+                            "0",
                             "-profile:v",
                             "high",
                             "-level:v",
@@ -591,18 +631,22 @@ class LyricsRuntime:
                         ],
                     )
                     return self._tv_encoder_cache
+                probe_error = (probe.stderr or b"").decode("utf-8", errors="ignore").strip()
+                self._logger.warning(
+                    "Intel Quick Sync 探测未通过，自动降为 1080p 软件编码："
+                    f"exit={probe.returncode} {probe_error[-500:]}"
+                )
             except (OSError, subprocess.TimeoutExpired) as error:
-                self._logger.debug(f"Intel Quick Sync 探测失败：{error}")
+                self._logger.warning(f"Intel Quick Sync 探测失败，自动降为 1080p 软件编码：{error}")
+        else:
+            self._logger.warning(
+                "容器内没有 /dev/dri/renderD*，电视歌词自动使用 1080p/30 低延迟软件编码。"
+            )
 
         self._tv_encoder_cache = (
             "libx264 软件编码",
             [],
             [
-                "-vf",
-                (
-                    f"scale={self.TV_OUTPUT_WIDTH}:{self.TV_OUTPUT_HEIGHT}:"
-                    "flags=lanczos+accurate_rnd"
-                ),
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -610,16 +654,38 @@ class LyricsRuntime:
                 "-tune",
                 "zerolatency",
                 "-crf",
-                "15",
+                "18",
+                "-bf",
+                "0",
+                "-x264-params",
+                "repeat-headers=1:scenecut=0:sync-lookahead=0",
                 "-profile:v",
                 "high",
                 "-level:v",
-                "5.1",
+                "4.1",
                 "-pix_fmt",
                 "yuv420p",
             ],
         )
         return self._tv_encoder_cache
+
+    def _tv_stream_profile(self, encoder_label: str) -> Tuple[int, int, int, str, str]:
+        """按编码器能力选择清晰度；软件模式优先保证低延迟和连续 30 FPS。"""
+        if encoder_label == "Intel Quick Sync":
+            return (
+                self.TV_OUTPUT_WIDTH,
+                self.TV_OUTPUT_HEIGHT,
+                self.TV_FPS,
+                "4K / 30 FPS",
+                "4k30-h264-mpegts",
+            )
+        return (
+            self.TV_SOFTWARE_OUTPUT_WIDTH,
+            self.TV_SOFTWARE_OUTPUT_HEIGHT,
+            self.TV_FPS,
+            "1080p / 30 FPS 低延迟",
+            "1080p30-lowlatency-h264-mpegts",
+        )
 
     def iter_tv_mpegts(self, channel_id: str, request_token: str):
         """把逐帧歌词画面实时编码成 Apple TV/UnPlay 易于解码的 H.264 MPEG-TS。"""
@@ -637,6 +703,9 @@ class LyricsRuntime:
             channel["expires_at"] = now + self.TV_CHANNEL_TTL
 
         encoder_label, pre_input_args, encoder_args = self._tv_encoder_config(ffmpeg_path)
+        output_width, output_height, output_fps, output_label, _ = self._tv_stream_profile(
+            encoder_label
+        )
         command = [
             ffmpeg_path,
             "-hide_banner",
@@ -650,28 +719,32 @@ class LyricsRuntime:
             "-s:v",
             f"{self.TV_WIDTH}x{self.TV_HEIGHT}",
             "-r",
-            str(self.TV_FPS),
+            str(output_fps),
             "-i",
             "pipe:0",
             "-an",
             *encoder_args,
             "-g",
-            str(self.TV_FPS * 2),
+            str(output_fps),
             "-keyint_min",
-            str(self.TV_FPS * 2),
+            str(output_fps),
             "-sc_threshold",
             "0",
             "-muxdelay",
             "0",
             "-muxpreload",
             "0",
+            "-flush_packets",
+            "1",
+            "-mpegts_flags",
+            "+resend_headers+initial_discontinuity",
             "-f",
             "mpegts",
             "pipe:1",
         ]
         self._logger.info(
-            f"电视歌词开始编码：{self.TV_OUTPUT_WIDTH}x{self.TV_OUTPUT_HEIGHT} "
-            f"{self.TV_FPS} FPS，{encoder_label}"
+            f"电视歌词开始编码：{output_width}x{output_height} "
+            f"{output_fps} FPS，{encoder_label}，低延迟模式"
         )
         process = subprocess.Popen(
             command,
@@ -683,7 +756,7 @@ class LyricsRuntime:
         stop_event = threading.Event()
 
         def produce_frames() -> None:
-            frame_interval = 1.0 / self.TV_FPS
+            frame_interval = 1.0 / output_fps
             next_frame_at = time.monotonic()
             try:
                 while not self._closed and not stop_event.is_set() and process.poll() is None:
@@ -695,10 +768,11 @@ class LyricsRuntime:
                         channel["last_seen_at"] = now
                         channel["expires_at"] = now + self.TV_CHANNEL_TTL
                         sid = str(channel.get("sid") or "")
-                    state = self.get_state(sid)
+                    # Plex sessions() 属于网络 I/O，绝不能卡住 30 FPS 视频生产线程。
+                    state = self.get_state(sid, background_poll=True)
                     cover, _ = self.get_cover(sid)
                     image = self._render_tv_image(channel_id, sid, state, cover).convert("RGB")
-                    if not process.stdin:
+                    if not process.stdin or process.stdin.closed:
                         break
                     process.stdin.write(image.tobytes())
                     process.stdin.flush()
@@ -709,10 +783,11 @@ class LyricsRuntime:
                     else:
                         next_frame_at = time.monotonic()
             except (BrokenPipeError, OSError, ValueError) as error:
-                self._logger.debug(f"电视歌词 H.264 编码输入结束：{error}")
+                if not stop_event.is_set():
+                    self._logger.debug(f"电视歌词 H.264 编码输入结束：{error}")
             finally:
                 try:
-                    if process.stdin:
+                    if process.stdin and not process.stdin.closed:
                         process.stdin.close()
                 except OSError:
                     pass
@@ -738,21 +813,20 @@ class LyricsRuntime:
                 yield chunk
         finally:
             stop_event.set()
-            try:
-                if process.stdin:
-                    process.stdin.close()
-            except OSError:
-                pass
             if process.poll() is None:
                 process.terminate()
                 try:
                     process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
                     process.kill()
-            producer.join(timeout=1)
-            self._tv_background_cache.pop(channel_id, None)
-            self._tv_scene_cache.pop(channel_id, None)
-            self._tv_lyrics_cache.pop(channel_id, None)
+            producer.join(timeout=1.5)
+            try:
+                if process.stdin and not process.stdin.closed:
+                    process.stdin.close()
+            except OSError:
+                pass
+            # UnPlay 偶尔会重新连接同一直播地址。保留已合成场景，避免每次重连
+            # 都重新模糊封面和绘制阴影，导致首帧延迟后再次被电视端超时断开。
 
     def iter_tv_stream(self, channel_id: str):
         """输出 UnPlay/MPV 可直接播放的 MJPEG 直播流。"""
@@ -1123,10 +1197,14 @@ class LyricsRuntime:
 
         accent = palette[0]
         if cover:
-            background = ImageOps.fit(cover, (width, height), method=Image.Resampling.LANCZOS)
-            background = background.filter(ImageFilter.GaussianBlur(round(66 * scale)))
+            # 模糊背景没有高频细节；先在小图上完成裁切、模糊和染色，再放大到
+            # 1080p。视觉效果等价，但切歌首帧不再被全尺寸大半径模糊阻塞。
+            work_size = (640, 360)
+            background = ImageOps.fit(cover, work_size, method=Image.Resampling.LANCZOS)
+            background = background.filter(ImageFilter.GaussianBlur(22))
             tint = tuple(max(7, int(value * 0.34)) for value in accent)
-            background = Image.blend(background, Image.new("RGB", (width, height), tint), 0.42)
+            background = Image.blend(background, Image.new("RGB", work_size, tint), 0.42)
+            background = background.resize((width, height), Image.Resampling.BILINEAR)
         else:
             background = Image.new("RGB", (width, height), (18, 20, 27))
 
@@ -1256,15 +1334,13 @@ class LyricsRuntime:
         glass_box = tuple(px(value) for value in (77, 138, 437, 480))
         glass_size = (glass_box[2] - glass_box[0], glass_box[3] - glass_box[1])
 
-        shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        ImageDraw.Draw(shadow, "RGBA").rounded_rectangle(
+        self._paste_tv_shadow(
+            canvas,
             tuple(px(value) for value in (72, 142, 442, 492)),
             radius=px(34),
-            fill=(0, 0, 0, 106),
+            blur_radius=px(22),
+            alpha=106,
         )
-        shadow = shadow.filter(ImageFilter.GaussianBlur(px(22)))
-        composed = Image.alpha_composite(canvas.convert("RGBA"), shadow).convert("RGB")
-        canvas.paste(composed)
 
         glass = canvas.crop(glass_box).filter(ImageFilter.GaussianBlur(px(13))).convert("RGB")
         glass_tint = self._mix_color(accent, (238, 244, 255), 0.58)
@@ -1277,15 +1353,13 @@ class LyricsRuntime:
         draw.rounded_rectangle(glass_box, radius=px(31), fill=(255, 255, 255, 13), outline=(255, 255, 255, 56), width=max(1, px(1)))
 
         cover_box = tuple(px(value) for value in (92, 126, 422, 456))
-        cover_shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        ImageDraw.Draw(cover_shadow, "RGBA").rounded_rectangle(
+        self._paste_tv_shadow(
+            canvas,
             tuple(px(value) for value in (87, 132, 427, 468)),
             radius=px(22),
-            fill=(0, 0, 0, 142),
+            blur_radius=px(17),
+            alpha=142,
         )
-        cover_shadow = cover_shadow.filter(ImageFilter.GaussianBlur(px(17)))
-        composed = Image.alpha_composite(canvas.convert("RGBA"), cover_shadow).convert("RGB")
-        canvas.paste(composed)
 
         if artwork:
             mask = Image.new("L", artwork.size, 0)
@@ -1296,6 +1370,30 @@ class LyricsRuntime:
         else:
             draw.rounded_rectangle(cover_box, radius=px(17), fill=(*accent, 64), outline=(255, 255, 255, 34), width=max(1, px(1)))
             self._draw_text(draw, (px(257), px(291)), "♪", px(82), (255, 255, 255, 132), "mm")
+
+    @staticmethod
+    def _paste_tv_shadow(
+        canvas: Image.Image,
+        box: Tuple[int, int, int, int],
+        radius: int,
+        blur_radius: int,
+        alpha: int,
+    ) -> None:
+        """只在阴影附近的小图层做模糊，避免逐首处理整张 1080p 画布。"""
+        left, top, right, bottom = box
+        padding = max(4, blur_radius * 2)
+        layer = Image.new(
+            "RGBA",
+            (right - left + padding * 2, bottom - top + padding * 2),
+            (0, 0, 0, 0),
+        )
+        ImageDraw.Draw(layer, "RGBA").rounded_rectangle(
+            (padding, padding, right - left + padding, bottom - top + padding),
+            radius=max(1, radius),
+            fill=(0, 0, 0, alpha),
+        )
+        layer = layer.filter(ImageFilter.GaussianBlur(max(1, blur_radius)))
+        canvas.paste(layer, (left - padding, top - padding), layer)
 
     def _draw_tv_lyrics(
         self,
@@ -1746,6 +1844,16 @@ class LyricsRuntime:
                         session["cover_type"] = "image/jpeg"
         except Exception as error:
             self._logger.debug(f"实时歌词封面代理读取失败：{error}")
+
+    def _run_plex_poll(self, sid: str) -> None:
+        """执行一次 Plex 进度刷新，并释放并发门闩。"""
+        try:
+            self._refresh_plex_session(sid)
+        finally:
+            with self._lock:
+                session = self._sessions.get(sid)
+                if session:
+                    session["poll_inflight"] = False
 
     def _refresh_plex_session(self, sid: str) -> None:
         with self._lock:

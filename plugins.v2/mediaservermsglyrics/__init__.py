@@ -44,7 +44,7 @@ class MediaServerMsgLyrics(_PluginBase):
     # 插件图标
     plugin_icon = "mediaplay.png"
     # 插件版本
-    plugin_version = "1.1.6"
+    plugin_version = "1.1.7"
     # 插件作者
     plugin_author = "PlaySong"
     # 作者主页
@@ -66,6 +66,7 @@ class MediaServerMsgLyrics(_PluginBase):
     _lyrics_enabled = True                     # Plex音乐通知是否跳转实时歌词页
     _lyrics_online_fallback = True             # 本地歌词缺失时查询LRCLIB
     _lyrics_public_url = "https://mp.playsong.cn"
+    _cast_stream_url = ""                      # Apple TV 访问 MoviePilot 的局域网直连地址
     _lyrics_path_mappings = ""                 # Plex路径到MoviePilot容器路径的映射
     _unplay_host = ""                          # Apple TV 上 UnPlay 的 HTTP 投屏 IP
 
@@ -148,6 +149,7 @@ class MediaServerMsgLyrics(_PluginBase):
                 self._lyrics_public_url = str(
                     config.get("lyrics_public_url") or "https://mp.playsong.cn"
                 ).strip().rstrip("/")
+                self._cast_stream_url = str(config.get("cast_stream_url") or "").strip().rstrip("/")
                 self._lyrics_path_mappings = str(config.get("lyrics_path_mappings") or "")
                 self._unplay_host = str(config.get("unplay_host") or "").strip()
             self._pending_messages = {}
@@ -526,6 +528,28 @@ class MediaServerMsgLyrics(_PluginBase):
                                 'props': {'cols': 12},
                                 'content': [
                                     {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'cast_stream_url',
+                                            'label': '电视流局域网直连地址（推荐）',
+                                            'placeholder': 'http://NAS局域网IP:3032',
+                                            'hint': '只供 Apple TV 取流；可绕过公网域名回流和反向代理缓冲。留空时继续使用歌词页公网地址',
+                                            'persistent-hint': True,
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'props': {'show': '{{lyrics_enabled}}'},
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': [
+                                    {
                                         'component': 'VTextarea',
                                         'props': {
                                             'model': 'lyrics_path_mappings',
@@ -705,6 +729,7 @@ class MediaServerMsgLyrics(_PluginBase):
             "lyrics_enabled": True,
             "lyrics_online_fallback": True,
             "lyrics_public_url": "https://mp.playsong.cn",
+            "cast_stream_url": "",
             "lyrics_path_mappings": "",
             "unplay_host": "",
             "aggregate_enabled": False,
